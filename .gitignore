@@ -1,0 +1,7 @@
+.venv/
+.warp-cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.idea/
+.vscode/
