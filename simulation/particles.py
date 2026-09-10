@@ -114,6 +114,7 @@ class ParticleSystem:
                 dt,
                 self.config.damping,
                 self.config.spring_strength,
+                self.config.direction_mix,
                 self.config.max_velocity,
                 self.config.idle_drift,
                 simulation_time,

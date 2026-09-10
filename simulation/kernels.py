@@ -16,6 +16,7 @@ def integrate_particles(
     dt: float,
     damping: float,
     spring_strength: float,
+    direction_mix: float,
     max_velocity: float,
     idle_drift: float,
     simulation_time: float,
@@ -34,7 +35,9 @@ def integrate_particles(
             distance = wp.sqrt(distance_squared + 1.0e-8)
             radial_direction = difference / distance
             source_direction = source_directions[source_index]
-            mixed_direction = wp.normalize(radial_direction * 0.84 + source_direction * 0.16)
+            mixed_direction = wp.normalize(
+                radial_direction * (1.0 - direction_mix) + source_direction * direction_mix
+            )
             remaining = 1.0 - distance / radius
             # Cubic-ish falloff gives a soft boundary and a forceful core.
             falloff = remaining * remaining * (3.0 - 2.0 * remaining)

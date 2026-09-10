@@ -63,16 +63,33 @@ def list_realsense_devices() -> list[RealSenseDeviceInfo]:
 class RealSenseCamera:
     """Own a RealSense pipeline and expose metric depth frames."""
 
-    def __init__(self, width: int = 640, height: int = 480, fps: int = 30):
+    def __init__(
+        self,
+        width: int = 640,
+        height: int = 360,
+        fps: int = 60,
+        visual_preset: str = "hand",
+        spatial_filter_enabled: bool = True,
+        spatial_filter_magnitude: float = 1.0,
+        spatial_filter_alpha: float = 0.65,
+        spatial_filter_delta: float = 20.0,
+    ):
         self.width = width
         self.height = height
         self.fps = fps
+        self.visual_preset = visual_preset
+        self.spatial_filter_enabled = spatial_filter_enabled
+        self.spatial_filter_magnitude = spatial_filter_magnitude
+        self.spatial_filter_alpha = spatial_filter_alpha
+        self.spatial_filter_delta = spatial_filter_delta
         self.depth_scale = 0.0
+        self.active_visual_preset = ""
         self.intrinsics: DepthIntrinsics | None = None
         self.device_info: RealSenseDeviceInfo | None = None
         self._rs = None
         self._context = None
         self._pipeline = None
+        self._spatial_filter = None
         self._started = False
 
     def start(self) -> None:
@@ -105,7 +122,14 @@ class RealSenseCamera:
             profile = pipeline.start(pipeline_config)
 
             depth_sensor = profile.get_device().first_depth_sensor()
+            self._apply_visual_preset(depth_sensor, rs)
             self.depth_scale = float(depth_sensor.get_depth_scale())
+            if depth_sensor.supports(rs.option.visual_preset):
+                preset_value = depth_sensor.get_option(rs.option.visual_preset)
+                self.active_visual_preset = depth_sensor.get_option_value_description(
+                    rs.option.visual_preset,
+                    preset_value,
+                )
             video_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
             intr = video_profile.get_intrinsics()
             self.intrinsics = DepthIntrinsics(
@@ -118,6 +142,19 @@ class RealSenseCamera:
             )
             self._rs = rs
             self._pipeline = pipeline
+            if self.spatial_filter_enabled:
+                spatial_filter = rs.spatial_filter()
+                spatial_filter.set_option(
+                    rs.option.filter_magnitude, self.spatial_filter_magnitude
+                )
+                spatial_filter.set_option(
+                    rs.option.filter_smooth_alpha, self.spatial_filter_alpha
+                )
+                spatial_filter.set_option(
+                    rs.option.filter_smooth_delta, self.spatial_filter_delta
+                )
+                spatial_filter.set_option(rs.option.holes_fill, 0.0)
+                self._spatial_filter = spatial_filter
             self._started = True
         except RealSenseUnavailableError:
             raise
@@ -139,7 +176,7 @@ class RealSenseCamera:
             depth_frame = frames.get_depth_frame()
             if not depth_frame:
                 return None
-            depth_u16 = np.asanyarray(depth_frame.get_data())
+            depth_u16 = np.asanyarray(self._filter_depth(depth_frame).get_data())
             depth_m = depth_u16.astype(np.float32) * self.depth_scale
             return DepthFrame(depth_m=depth_m, timestamp_ms=float(depth_frame.get_timestamp()))
         except RuntimeError:
@@ -155,7 +192,7 @@ class RealSenseCamera:
             depth_frame = frames.get_depth_frame()
             if not depth_frame:
                 return None
-            depth_u16 = np.asanyarray(depth_frame.get_data())
+            depth_u16 = np.asanyarray(self._filter_depth(depth_frame).get_data())
             return DepthFrame(
                 depth_m=depth_u16.astype(np.float32) * self.depth_scale,
                 timestamp_ms=float(depth_frame.get_timestamp()),
@@ -171,6 +208,33 @@ class RealSenseCamera:
                 pass
         self._started = False
         self._pipeline = None
+        self._spatial_filter = None
+
+    def _filter_depth(self, depth_frame):
+        if self._spatial_filter is None:
+            return depth_frame
+        return self._spatial_filter.process(depth_frame).as_depth_frame()
+
+    def _apply_visual_preset(self, depth_sensor, rs) -> None:
+        if not self.visual_preset:
+            return
+        if not depth_sensor.supports(rs.option.visual_preset):
+            raise RealSenseUnavailableError(
+                f"This depth sensor does not support the requested '{self.visual_preset}' preset."
+            )
+        preset_range = depth_sensor.get_option_range(rs.option.visual_preset)
+        requested = self.visual_preset.casefold()
+        for value in range(int(preset_range.min), int(preset_range.max) + 1):
+            description = depth_sensor.get_option_value_description(
+                rs.option.visual_preset,
+                float(value),
+            )
+            if description.casefold() == requested:
+                depth_sensor.set_option(rs.option.visual_preset, float(value))
+                return
+        raise RealSenseUnavailableError(
+            f"RealSense visual preset '{self.visual_preset}' is not available."
+        )
 
     def __enter__(self):
         self.start()

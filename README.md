@@ -1,6 +1,12 @@
 # DepthForce
 
-DepthForce is a native-Windows Python MVP in which motion from an Intel RealSense D435i becomes a small 3D force field that repels a dense NVIDIA Warp particle volume. The particle state remains on the CUDA device; only the downsampled camera force representation is processed on the CPU and uploaded each camera frame.
+DepthForce is a native-Windows Python MVP in which a persistent foreground silhouette from an Intel RealSense D435i becomes a tracked 3D force field that repels a dense NVIDIA Warp particle volume. The particle state remains on the CUDA device; only the compact force representation is processed on the CPU and uploaded each camera frame.
+
+## Demo
+
+[![DepthForce D435i real-time interaction demo](assets/depthforce-demo-cover.jpg)](assets/depthforce-demo-github.mp4)
+
+Click the image to watch a 65-second D435i experiment showing persistent arm silhouettes, lateral swipes, approach motion, and particle recovery. The GitHub copy is a silent 720p H.264 encode; the full-resolution master stays outside Git history.
 
 The synthetic mode is fully usable without a camera:
 
@@ -15,15 +21,16 @@ python main.py --synthetic
 - Intel RealSense D435i connected through a USB 3 port for live mode
 - A working OpenGL display context
 
-Tested locally on 2026-08-30 with:
+Tested locally through 2026-09-10 with:
 
 - Windows 11 23H2 (build 22631)
 - Python 3.10.6 in `.venv`
 - NVIDIA driver 560.70 (driver reports CUDA 12.6)
 - CUDA toolkit 12.4 installed; Warp 1.16.0 uses its bundled CUDA 12.9 runtime toolchain
 - `warp-lang` 1.16.0, `pyrealsense2` 2.58.3.10794, NumPy 2.2.6, Pyglet 2.1.11, OpenCV 4.12.0
+- RealSense D435i firmware 5.17.3.10 over USB 3.2; verified 640x360 depth at 59.9 device FPS
 
-The D435i was not physically connected during this implementation session. SDK enumeration and the no-device path were validated, but live stream/interaction validation still requires the camera.
+The D435i live stream, motion extraction, and integrated particle interaction have now been validated on the target machine.
 
 ## Setup
 
@@ -64,16 +71,18 @@ python scripts\test_renderer.py
 # C: force kernel, worst-case 96-source benchmark and displacement check
 python scripts\test_simulation.py
 
-# D: enumerate the D435i and stream 640x480 @ 30 FPS depth
+# D: enumerate the D435i and stream filtered 640x360 @ 60 FPS depth
 python scripts\test_realsense.py
 
-# E/F: synthetic depth-motion extraction and 3D clustering
+# E/F: persistent foreground, XYZ velocity, fade, and preset tests
 python scripts\test_depth_motion.py
 ```
 
 `test_realsense.py` exits with a clear `NO DEVICE` result when a camera is not present.
 
 ## Run
+
+On Windows, double-click `启动DepthForce.cmd` in the project folder for the recommended Balanced mode with camera controls.
 
 Without a camera:
 
@@ -92,33 +101,50 @@ Useful diagnostic variants:
 ```powershell
 python main.py --synthetic --debug
 python main.py --debug --camera-debug
+python main.py --preset punchy
 python main.py --synthetic --particles 100000
+python main.py --force-strength 60 --force-radius 0.90 --motion-threshold 0.040 --mirror
 ```
 
-The defaults are 150,000 particles, `cuda:0`, and a 1280x800 render window. `--frames N` is available for repeatable benchmarks and automated smoke tests.
+The defaults are 150,000 particles, `cuda:0`, a maximized particle window that keeps the normal title bar and taskbar, and the smooth `balanced` interaction preset. Launch with `--no-maximized` to keep the original 1280x800 window size. `--frames N` is available for repeatable benchmarks and automated smoke tests.
+
+Live mode learns the empty scene for roughly the first third of a second. Keep hands and body out of view while it starts. Press `R`, briefly clear the camera view, and let it relearn whenever the camera or background moves.
+
+| Preset | Feel |
+|---|---|
+| `balanced` | Smoother tracking, longer fade, controlled directional force |
+| `punchy` | Faster response, larger radius, stronger XYZ directional push |
 
 ## Controls
 
 | Key | Action |
 |---|---|
 | `ESC` / `Q` | Quit |
-| `R` | Reset positions and velocities |
+| `R` | Reset particles and relearn the empty depth background |
 | `SPACE` | Enable/disable camera or synthetic interaction |
 | `D` | Toggle renderer/live console diagnostics |
+| `M` | Toggle horizontal mirror interaction |
+| `1` | Select Balanced |
+| `2` | Select Punchy |
 | `+` / `-` | Increase/decrease force strength |
 
-With `--camera-debug`, the OpenCV depth/motion window appears only while debug mode is enabled. The primary output remains the Warp particle window.
+With `--camera-debug`, the OpenCV window shows the filtered depth, green foreground mask, background-learning status, and active track count. It provides live controls for the Balanced/Punchy preset, force, radius, foreground gap, and mirror. Tune them while moving, then press `D` to hide diagnostics for a clean recording. The primary output remains the Warp particle window.
+
+Horizontal mirror behavior is enabled by default because it feels natural when a person faces the camera: moving to the right pushes particles on the right. Use `M` or `--no-mirror` for literal camera-view coordinates.
 
 ## How it works
 
 ```text
-D435i 640x480 depth @ 30 FPS
+D435i 640x360 depth @ 60 FPS + Hand visual preset
         |
         v
-160x120 metric depth + temporal smoothing + motion threshold
+light edge-preserving spatial filter (no temporal filter)
         |
         v
-10x10 grid clustering -> at most 96 camera-space 3D sources
+160x90 robust metric depth -> persistent foreground background subtraction
+        |
+        v
+connected-component cleanup -> persistent local 3D tracks + XYZ velocity
         |
         v
 small CPU-to-GPU source upload
@@ -130,7 +156,7 @@ small CPU-to-GPU source upload
 Warp OpenGLRenderer consumes the live Warp position array
 ```
 
-The source mapping deliberately exaggerates small motion, adds extra strength for motion toward the camera, and uses smooth radial falloff. Particles retain momentum and then return gradually to their rest positions.
+The interaction range is 0.16-1.8 m. A foreground remains active even while nearly stationary, so slow arm movements hold particles open instead of disappearing. Each local source is deprojected with the camera intrinsics; matched positions generate metric XYZ travel direction, with additional strength for motion toward the camera. Tracks glide, briefly extrapolate, and fade instead of popping off.
 
 Repository layout:
 
@@ -138,7 +164,7 @@ Repository layout:
 main.py                         application/render loop and controls
 config.py                       visual, simulation, camera, and motion constants
 camera/realsense.py             native RealSense depth wrapper
-interaction/depth_motion.py     motion mask, deprojection, source clustering
+interaction/depth_motion.py     background model, foreground mask, XYZ source tracking
 simulation/kernels.py           Warp integration/reset kernels
 simulation/particles.py         GPU state and small source uploads
 rendering.py                    low-detail particle geometry compatibility
@@ -151,18 +177,20 @@ On the RTX 3060 Laptop GPU above:
 
 - Static 150k renderer test: **108.7 average FPS** over 180 frames.
 - Integrated 150k synthetic demo: **119–122 steady-state FPS**; **92.8 average FPS** over 600 frames when including the first 1.47-second kernel compilation.
-- 150k particles against the maximum 96 force sources: **1,530-1,781 simulation steps/s** across two 300-step synchronized runs.
+- Current D435i profile: **59.9 device FPS** with the camera reporting the `Hand` preset active.
+- Current integrated 360-frame smoke test: **295.2 average render FPS** with filtered camera interaction at **59.9 FPS**.
+- 150k particles against the maximum 96 force sources: approximately **7,600 simulation steps/s** in the current synchronized regression test.
 
 Warp 1.16 currently ignores `render_points(..., as_spheres=False)` and otherwise instantiates a 32x32 sphere (2,048 triangles) for each tiny point. `rendering.py` changes only this renderer instance to a 4x6 mesh (48 triangles), improving the measured static result from 8.4 to 108.7 FPS. The particle position buffer still flows directly from Warp CUDA to the renderer's registered OpenGL buffer. Initialization uses the already-existing CPU rest positions, so there is no full GPU particle readback in the real-time loop.
 
 ## Current limitations
 
-- Live D435i behavior is implemented but not hardware-validated in this session because no device was connected.
-- Camera-space to scene-space calibration is intentionally simple. The default 0.25-2.0 m interaction range and scene scale may need small adjustments for the installation distance.
-- Source clustering is a lightweight fixed image grid rather than connected-components tracking, so one large moving body may generate many nearby sources.
+- The camera must see the empty installation scene briefly at startup or after `R`; moving the camera requires background relearning.
+- Foreground tracking is geometric depth tracking, not semantic hand recognition. Hands, arms, bodies, and other closer objects can all interact.
+- Camera-space to scene-space calibration is intentionally simple. The default 0.16-1.8 m interaction range and scene scale may need small adjustments for the installation distance.
 - Particles use one visual color field and do not use RGB camera color.
 - The effect is an artistic spring/repulsion system, not a physically accurate fluid simulation.
 
 The single best next visual improvement is a short GPU trail/afterimage pass. It would make hand swipes and temporary cavities much easier to read without adding perception models or changing the camera pipeline.
 
-Future extensions can include vortex/attract modes, shockwaves, depth echo, RGB-colored particles, body-silhouette spawning, SPH/fluid behavior, and audio reactivity.
+Future extensions can include vortex/attract modes, shockwaves, depth echo, RGB-colored particles, semantic hand-only masking, SPH/fluid behavior, and audio reactivity.
