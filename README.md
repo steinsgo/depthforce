@@ -4,9 +4,9 @@ DepthForce is a native-Windows Python MVP in which a persistent foreground silho
 
 ## Demo
 
-[![DepthForce D435i real-time interaction demo](assets/depthforce-demo-cover.jpg)](assets/depthforce-demo-github.mp4)
+![DepthForce D435i real-time particle interaction](assets/depthforce-demo-preview.gif)
 
-Click the image to watch a 65-second D435i experiment showing persistent arm silhouettes, lateral swipes, approach motion, and particle recovery. The GitHub copy is a silent 720p H.264 encode; the full-resolution master stays outside Git history.
+The 10-second preview shows persistent arm tracking, lateral particle displacement, and smooth recovery. [Download the complete 65-second D435i experiment (MP4, 8.6 MB)](assets/depthforce-demo-github.mp4?raw=1). The full-resolution master stays outside Git history.
 
 The synthetic mode is fully usable without a camera:
 
